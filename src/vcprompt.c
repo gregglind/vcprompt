@@ -29,7 +29,8 @@
 void parse_args(int argc, char** argv, options_t* options)
 {
     int opt;
-    while ((opt = getopt(argc, argv, "hf:d")) != -1) {
+    char* timeoutstring;
+    while ((opt = getopt(argc, argv, "hf:dt:")) != -1) {
         switch (opt) {
             case 'f':
                 options->format = optarg;
@@ -37,9 +38,12 @@ void parse_args(int argc, char** argv, options_t* options)
             case 'd':
                 options->debug = 1;
                 break;
+            case 't':
+                options->timeout = strtol(optarg,&timeoutstring,10);
+                break;
             case 'h':
             default:
-                printf("usage: %s [-h] [-d] [-f FORMAT]\n", argv[0]);
+                printf("usage: %s [-h] [-d] [-t ms_timeout] [-f FORMAT]\n", argv[0]);
                 printf("FORMAT (default=\"%s\") may contain:\n%s",
                 DEFAULT_FORMAT,
                 " %b  show branch\n"
@@ -185,8 +189,36 @@ vccontext_t* probe_parents(vccontext_t** contexts, int num_contexts)
     }
 }
 
+#include  <signal.h>
+#include <sys/time.h>
+
+/* The signal handler just clears the flag and re-enables itself.  */
+void
+exit_on_alarm (int sig)
+{
+    printf("[unknown:timeout]");
+    exit(1);
+}
+
+unsigned int
+msalarm (unsigned int milliseconds)
+{
+    struct itimerval old, new;
+    new.it_interval.tv_usec = 0;
+    new.it_interval.tv_sec = 0;
+    new.it_value.tv_usec = 1000 * (long int) milliseconds;
+    new.it_value.tv_sec =  0;
+    if (setitimer (ITIMER_REAL, &new, &old) < 0)
+     return 0;
+    else
+     return old.it_value.tv_sec;
+}
+
 int main(int argc, char** argv)
 {
+    /* Establish a handler for SIGALRM signals.  */
+    signal (SIGALRM, exit_on_alarm);
+
     char* format = getenv("VCPROMPT_FORMAT");
     if (format == NULL)
         format = DEFAULT_FORMAT;
@@ -199,10 +231,16 @@ int main(int argc, char** argv)
         .show_modified = 0,
         .show_staged = 0,
     };
-
     parse_args(argc, argv, &options);
     parse_format(&options);
     set_options(&options);
+
+    if (options.timeout) {
+        debug("will timeout after %d ms", options.timeout);
+        msalarm (options.timeout);
+    } else {
+        debug("will never timeout");
+    }
 
     vccontext_t* contexts[] = {
         get_cvs_context(&options),
